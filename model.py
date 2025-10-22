@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import KFold
 from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Lasso
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import mean_squared_error
 import lightgbm as lgb
@@ -21,7 +22,7 @@ SUBMISSION_FILE = 'sample_submission.csv'
 OUTPUT_FILE = 'submission.csv'
 
 # K-Fold setup
-N_SPLITS = 10
+N_SPLITS = 15
 RANDOM_SEED = 42
 
 def load_data():
@@ -54,57 +55,57 @@ def perform_eda(train_df):
     print(f"  Log-Transformed: {log_skew:.2f} (Much closer to normal)")
     print("Conclusion: We will use a log-transformed target for training.\n")
     
-    # --- Target Distribution Graphs ---
-    plt.figure(figsize=(12,5))
-    plt.subplot(1,2,1)
-    sns.histplot(train_df['HotelValue'], kde=True, bins=50, color='skyblue')
-    plt.title("HotelValue Distribution (Original)")
+    # # --- Target Distribution Graphs ---
+    # plt.figure(figsize=(12,5))
+    # plt.subplot(1,2,1)
+    # sns.histplot(train_df['HotelValue'], kde=True, bins=50, color='skyblue')
+    # plt.title("HotelValue Distribution (Original)")
     
-    plt.subplot(1,2,2)
-    sns.histplot(np.log1p(train_df['HotelValue']), kde=True, bins=50, color='orange')
-    plt.title("HotelValue Distribution (Log-Transformed)")
-    plt.show()
+    # plt.subplot(1,2,2)
+    # sns.histplot(np.log1p(train_df['HotelValue']), kde=True, bins=50, color='orange')
+    # plt.title("HotelValue Distribution (Log-Transformed)")
+    # plt.show()
     
-    # --- Missing Data ---
-    missing_pct = (train_df.isnull().sum() / len(train_df)) * 100
-    missing_pct = missing_pct[missing_pct > 0].sort_values(ascending=False)
+    # # --- Missing Data ---
+    # missing_pct = (train_df.isnull().sum() / len(train_df)) * 100
+    # missing_pct = missing_pct[missing_pct > 0].sort_values(ascending=False)
     
-    print(f"Top 5 Features with Missing Data:")
-    print(missing_pct.head(5))
+    # print(f"Top 5 Features with Missing Data:")
+    # print(missing_pct.head(5))
     
-    # Missing Data Heatmap
-    plt.figure(figsize=(12,6))
-    sns.heatmap(train_df.isnull(), cbar=False, yticklabels=False, cmap='viridis')
-    plt.title("Missing Data Heatmap")
-    plt.show()
+    # # Missing Data Heatmap
+    # plt.figure(figsize=(12,6))
+    # sns.heatmap(train_df.isnull(), cbar=False, yticklabels=False, cmap='viridis')
+    # plt.title("Missing Data Heatmap")
+    # plt.show()
 
-    # --- Correlation Matrix for Numerical Features ---
-    numeric_cols = train_df.select_dtypes(include=np.number).columns
-    corr_matrix = train_df[numeric_cols].corr()
+    # # --- Correlation Matrix for Numerical Features ---
+    # numeric_cols = train_df.select_dtypes(include=np.number).columns
+    # corr_matrix = train_df[numeric_cols].corr()
     
-    plt.figure(figsize=(15,12))
-    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', center=0)
-    plt.title("Correlation Matrix")
-    plt.show()
+    # plt.figure(figsize=(15,12))
+    # sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', center=0)
+    # plt.title("Correlation Matrix")
+    # plt.show()
     
-    # --- Top Features Correlated with HotelValue ---
-    top_corr_features = corr_matrix['HotelValue'].sort_values(ascending=False).head(6)[1:]
-    print("Top 5 Numerical Features Correlated with HotelValue:")
-    print(top_corr_features)
+    # # --- Top Features Correlated with HotelValue ---
+    # top_corr_features = corr_matrix['HotelValue'].sort_values(ascending=False).head(6)[1:]
+    # print("Top 5 Numerical Features Correlated with HotelValue:")
+    # print(top_corr_features)
     
-    # Pairplot for top correlated features (optional, can be slow on large datasets)
-    top_features = top_corr_features.index.tolist() + ['HotelValue']
-    sns.pairplot(train_df[top_features])
-    plt.show()
+    # # Pairplot for top correlated features (optional, can be slow on large datasets)
+    # top_features = top_corr_features.index.tolist() + ['HotelValue']
+    # sns.pairplot(train_df[top_features])
+    # plt.show()
     
-    # --- Categorical Features Distributions ---
-    cat_cols = train_df.select_dtypes(include='object').columns
-    for col in cat_cols[:5]:  # Show first 5 for brevity
-        plt.figure(figsize=(8,4))
-        sns.countplot(data=train_df, x=col, order=train_df[col].value_counts().index)
-        plt.title(f"Distribution of {col}")
-        plt.xticks(rotation=45)
-        plt.show()
+    # # --- Categorical Features Distributions ---
+    # cat_cols = train_df.select_dtypes(include='object').columns
+    # for col in cat_cols[:5]:  # Show first 5 for brevity
+    #     plt.figure(figsize=(8,4))
+    #     sns.countplot(data=train_df, x=col, order=train_df[col].value_counts().index)
+    #     plt.title(f"Distribution of {col}")
+    #     plt.xticks(rotation=45)
+    #     plt.show()
     
     print("\nEDA complete with graphs.\n")
 
@@ -192,8 +193,8 @@ def preprocess_and_feature_engineer(train_df, test_df):
     return X, X_test, y_train, test_ids
 
 def train_model(X, y_train, X_test):
-    """Trains a Linear Regression model using K-Fold Cross-Validation."""
-    print("--- 4. Model Training (Linear Regression only) ---")
+    """Trains a Lasso Regression model using K-Fold Cross-Validation."""
+    print("--- 4. Model Training: Lasso Regression ---")
 
     # Separate categorical and numerical features
     categorical_features = X.select_dtypes(include=['category']).columns.tolist()
@@ -209,6 +210,9 @@ def train_model(X, y_train, X_test):
     # Initialize OneHotEncoder
     ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
 
+    # Hyperparameter for Lasso
+    alpha = 0.001  # you can experiment with this
+
     for fold, (train_index, val_index) in enumerate(kf.split(X, y_train)):
         print(f"--- Fold {fold+1}/{N_SPLITS} ---")
         X_train_fold, X_val_fold = X.iloc[train_index], X.iloc[val_index]
@@ -218,27 +222,27 @@ def train_model(X, y_train, X_test):
         X_train_ohe = ohe.fit_transform(X_train_fold[categorical_features])
         X_val_ohe = ohe.transform(X_val_fold[categorical_features])
 
-        # Convert to DataFrame with string column names
+        # Convert to DataFrame
         X_train_ohe = pd.DataFrame(X_train_ohe, columns=ohe.get_feature_names_out().astype(str))
         X_val_ohe = pd.DataFrame(X_val_ohe, columns=ohe.get_feature_names_out().astype(str))
 
         # Concatenate numerical features
-        X_train_lin = pd.concat([X_train_ohe, X_train_fold[numerical_features].reset_index(drop=True)], axis=1)
-        X_val_lin = pd.concat([X_val_ohe, X_val_fold[numerical_features].reset_index(drop=True)], axis=1)
+        X_train_lasso = pd.concat([X_train_ohe, X_train_fold[numerical_features].reset_index(drop=True)], axis=1)
+        X_val_lasso = pd.concat([X_val_ohe, X_val_fold[numerical_features].reset_index(drop=True)], axis=1)
 
-        # Train Linear Regression
-        model = LinearRegression()
-        model.fit(X_train_lin, y_train_fold)
+        # Train Lasso Regression
+        model = Lasso(alpha=alpha, random_state=RANDOM_SEED, max_iter=10000)
+        model.fit(X_train_lasso, y_train_fold)
 
         # Validation predictions
-        val_preds = model.predict(X_val_lin)
+        val_preds = model.predict(X_val_lasso)
         oof_predictions[val_index] = val_preds
 
         # Test set predictions
         X_test_ohe = ohe.transform(X_test[categorical_features])
         X_test_ohe = pd.DataFrame(X_test_ohe, columns=ohe.get_feature_names_out().astype(str))
-        X_test_lin = pd.concat([X_test_ohe, X_test[numerical_features].reset_index(drop=True)], axis=1)
-        test_predictions += model.predict(X_test_lin) / N_SPLITS
+        X_test_lasso = pd.concat([X_test_ohe, X_test[numerical_features].reset_index(drop=True)], axis=1)
+        test_predictions += model.predict(X_test_lasso) / N_SPLITS
 
     # Calculate overall OOF RMSE
     oof_rmse = np.sqrt(mean_squared_error(y_train, oof_predictions))
