@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import KFold
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import mean_squared_error
 import lightgbm as lgb
 import warnings
@@ -40,7 +42,7 @@ def load_data():
     return train_df, test_df, sample_sub
 
 def perform_eda(train_df):
-    """Performs and prints key EDA insights."""
+    """Performs and prints key EDA insights with graphs."""
     print("--- 2. Performing EDA ---")
     
     # --- Target Variable Analysis ---
@@ -52,22 +54,60 @@ def perform_eda(train_df):
     print(f"  Log-Transformed: {log_skew:.2f} (Much closer to normal)")
     print("Conclusion: We will use a log-transformed target for training.\n")
     
+    # --- Target Distribution Graphs ---
+    plt.figure(figsize=(12,5))
+    plt.subplot(1,2,1)
+    sns.histplot(train_df['HotelValue'], kde=True, bins=50, color='skyblue')
+    plt.title("HotelValue Distribution (Original)")
+    
+    plt.subplot(1,2,2)
+    sns.histplot(np.log1p(train_df['HotelValue']), kde=True, bins=50, color='orange')
+    plt.title("HotelValue Distribution (Log-Transformed)")
+    plt.show()
+    
     # --- Missing Data ---
     missing_pct = (train_df.isnull().sum() / len(train_df)) * 100
     missing_pct = missing_pct[missing_pct > 0].sort_values(ascending=False)
     
     print(f"Top 5 Features with Missing Data:")
     print(missing_pct.head(5))
-    print("Note: High missing % for 'PoolQuality', 'ExtraFacility', etc., is expected and means 'None'.\n")
-
-    # --- Numerical Feature Correlation ---
-    # We must include the target variable for this step
-    corr_matrix = train_df.select_dtypes(include=np.number).corr()
-    top_corr_features = corr_matrix['HotelValue'].sort_values(ascending=False).head(6)[1:]
     
+    # Missing Data Heatmap
+    plt.figure(figsize=(12,6))
+    sns.heatmap(train_df.isnull(), cbar=False, yticklabels=False, cmap='viridis')
+    plt.title("Missing Data Heatmap")
+    plt.show()
+
+    # --- Correlation Matrix for Numerical Features ---
+    numeric_cols = train_df.select_dtypes(include=np.number).columns
+    corr_matrix = train_df[numeric_cols].corr()
+    
+    plt.figure(figsize=(15,12))
+    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', center=0)
+    plt.title("Correlation Matrix")
+    plt.show()
+    
+    # --- Top Features Correlated with HotelValue ---
+    top_corr_features = corr_matrix['HotelValue'].sort_values(ascending=False).head(6)[1:]
     print("Top 5 Numerical Features Correlated with HotelValue:")
     print(top_corr_features)
-    print("\nEDA complete.\n")
+    
+    # Pairplot for top correlated features (optional, can be slow on large datasets)
+    top_features = top_corr_features.index.tolist() + ['HotelValue']
+    sns.pairplot(train_df[top_features])
+    plt.show()
+    
+    # --- Categorical Features Distributions ---
+    cat_cols = train_df.select_dtypes(include='object').columns
+    for col in cat_cols[:5]:  # Show first 5 for brevity
+        plt.figure(figsize=(8,4))
+        sns.countplot(data=train_df, x=col, order=train_df[col].value_counts().index)
+        plt.title(f"Distribution of {col}")
+        plt.xticks(rotation=45)
+        plt.show()
+    
+    print("\nEDA complete with graphs.\n")
+
 
 def preprocess_and_feature_engineer(train_df, test_df):
     """Cleans data, imputes missing values, and creates new features."""
@@ -152,11 +192,12 @@ def preprocess_and_feature_engineer(train_df, test_df):
     return X, X_test, y_train, test_ids
 
 def train_model(X, y_train, X_test):
-    """Trains a LightGBM model using K-Fold Cross-Validation."""
-    print("--- 4. Model Training ---")
-    
-    # Get list of categorical feature names for LightGBM
+    """Trains a Linear Regression model using K-Fold Cross-Validation."""
+    print("--- 4. Model Training (Linear Regression only) ---")
+
+    # Separate categorical and numerical features
     categorical_features = X.select_dtypes(include=['category']).columns.tolist()
+    numerical_features = X.select_dtypes(include=[np.number]).columns.tolist()
 
     # K-Fold Cross-Validation setup
     kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_SEED)
@@ -165,50 +206,45 @@ def train_model(X, y_train, X_test):
     oof_predictions = np.zeros(X.shape[0])
     test_predictions = np.zeros(X_test.shape[0])
 
-    # LightGBM Model Parameters
-    lgb_params = {
-        'objective': 'regression_l1', # MAE (L1) is robust to outliers
-        'metric': 'rmse',
-        'n_estimators': 2000,
-        'learning_rate': 0.01,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 1,
-        'lambda_l1': 0.1,
-        'lambda_l2': 0.1,
-        'num_leaves': 31,
-        'verbose': -1,
-        'n_jobs': -1,
-        'seed': RANDOM_SEED,
-        'boosting_type': 'gbdt',
-    }
+    # Initialize OneHotEncoder
+    ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
 
     for fold, (train_index, val_index) in enumerate(kf.split(X, y_train)):
         print(f"--- Fold {fold+1}/{N_SPLITS} ---")
         X_train_fold, X_val_fold = X.iloc[train_index], X.iloc[val_index]
         y_train_fold, y_val_fold = y_train.iloc[train_index], y_train.iloc[val_index]
 
-        model = lgb.LGBMRegressor(**lgb_params)
-        
-        model.fit(X_train_fold, y_train_fold,
-                  eval_set=[(X_val_fold, y_val_fold)],
-                  eval_metric='rmse',
-                  callbacks=[lgb.early_stopping(100), lgb.log_evaluation(period=False)],
-                  categorical_feature=categorical_features)
-        
-        # Store validation predictions
-        val_preds = model.predict(X_val_fold)
-        oof_predictions[val_index] = val_preds
-        
-        # Predict on test data (average predictions across folds)
-        fold_test_preds = model.predict(X_test)
-        test_predictions += fold_test_preds / N_SPLITS
+        # One-hot encode categorical features
+        X_train_ohe = ohe.fit_transform(X_train_fold[categorical_features])
+        X_val_ohe = ohe.transform(X_val_fold[categorical_features])
 
-    # Calculate overall Out-of-Fold (OOF) RMSE
+        # Convert to DataFrame with string column names
+        X_train_ohe = pd.DataFrame(X_train_ohe, columns=ohe.get_feature_names_out().astype(str))
+        X_val_ohe = pd.DataFrame(X_val_ohe, columns=ohe.get_feature_names_out().astype(str))
+
+        # Concatenate numerical features
+        X_train_lin = pd.concat([X_train_ohe, X_train_fold[numerical_features].reset_index(drop=True)], axis=1)
+        X_val_lin = pd.concat([X_val_ohe, X_val_fold[numerical_features].reset_index(drop=True)], axis=1)
+
+        # Train Linear Regression
+        model = LinearRegression()
+        model.fit(X_train_lin, y_train_fold)
+
+        # Validation predictions
+        val_preds = model.predict(X_val_lin)
+        oof_predictions[val_index] = val_preds
+
+        # Test set predictions
+        X_test_ohe = ohe.transform(X_test[categorical_features])
+        X_test_ohe = pd.DataFrame(X_test_ohe, columns=ohe.get_feature_names_out().astype(str))
+        X_test_lin = pd.concat([X_test_ohe, X_test[numerical_features].reset_index(drop=True)], axis=1)
+        test_predictions += model.predict(X_test_lin) / N_SPLITS
+
+    # Calculate overall OOF RMSE
     oof_rmse = np.sqrt(mean_squared_error(y_train, oof_predictions))
     print(f"\nTraining complete.")
     print(f"Overall OOF RMSE (on log-transformed data): {oof_rmse:.5f}\n")
-    
+
     return test_predictions
 
 def create_submission(test_ids, test_predictions):
@@ -255,4 +291,4 @@ if __name__ == "__main__":
         # Step 5: Submission
         create_submission(test_ids, test_predictions)
         
-        print("\n✅ Pipeline finished successfully!")
+        print("\n Pipeline finished successfully!")
