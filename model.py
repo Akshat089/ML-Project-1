@@ -7,6 +7,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Lasso
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import mean_squared_error
+from sklearn.linear_model import Ridge
 import lightgbm as lgb
 import warnings
 import os
@@ -193,8 +194,8 @@ def preprocess_and_feature_engineer(train_df, test_df):
     return X, X_test, y_train, test_ids
 
 def train_model(X, y_train, X_test):
-    """Trains a Lasso Regression model using K-Fold Cross-Validation."""
-    print("--- 4. Model Training: Lasso Regression ---")
+    """Trains a Ridge Regression model using K-Fold Cross-Validation."""
+    print("--- 4. Model Training: Ridge Regression ---")
 
     # Separate categorical and numerical features
     categorical_features = X.select_dtypes(include=['category']).columns.tolist()
@@ -210,8 +211,8 @@ def train_model(X, y_train, X_test):
     # Initialize OneHotEncoder
     ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
 
-    # Hyperparameter for Lasso
-    alpha = 0.001  # you can experiment with this
+    # Hyperparameter for Ridge
+    alpha = 0.15  # You can manually change this for experiments
 
     for fold, (train_index, val_index) in enumerate(kf.split(X, y_train)):
         print(f"--- Fold {fold+1}/{N_SPLITS} ---")
@@ -227,22 +228,22 @@ def train_model(X, y_train, X_test):
         X_val_ohe = pd.DataFrame(X_val_ohe, columns=ohe.get_feature_names_out().astype(str))
 
         # Concatenate numerical features
-        X_train_lasso = pd.concat([X_train_ohe, X_train_fold[numerical_features].reset_index(drop=True)], axis=1)
-        X_val_lasso = pd.concat([X_val_ohe, X_val_fold[numerical_features].reset_index(drop=True)], axis=1)
+        X_train_ridge = pd.concat([X_train_ohe, X_train_fold[numerical_features].reset_index(drop=True)], axis=1)
+        X_val_ridge = pd.concat([X_val_ohe, X_val_fold[numerical_features].reset_index(drop=True)], axis=1)
 
-        # Train Lasso Regression
-        model = Lasso(alpha=alpha, random_state=RANDOM_SEED, max_iter=10000)
-        model.fit(X_train_lasso, y_train_fold)
+        # Train Ridge Regression
+        model = Ridge(alpha=alpha, random_state=RANDOM_SEED, max_iter=10000)
+        model.fit(X_train_ridge, y_train_fold)
 
         # Validation predictions
-        val_preds = model.predict(X_val_lasso)
+        val_preds = model.predict(X_val_ridge)
         oof_predictions[val_index] = val_preds
 
         # Test set predictions
         X_test_ohe = ohe.transform(X_test[categorical_features])
         X_test_ohe = pd.DataFrame(X_test_ohe, columns=ohe.get_feature_names_out().astype(str))
-        X_test_lasso = pd.concat([X_test_ohe, X_test[numerical_features].reset_index(drop=True)], axis=1)
-        test_predictions += model.predict(X_test_lasso) / N_SPLITS
+        X_test_ridge = pd.concat([X_test_ohe, X_test[numerical_features].reset_index(drop=True)], axis=1)
+        test_predictions += model.predict(X_test_ridge) / N_SPLITS
 
     # Calculate overall OOF RMSE
     oof_rmse = np.sqrt(mean_squared_error(y_train, oof_predictions))
