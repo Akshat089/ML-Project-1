@@ -7,6 +7,10 @@ from sklearn.metrics import mean_squared_error
 from sklearn.ensemble import GradientBoostingRegressor
 import warnings
 import os
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor, GradientBoostingRegressor, AdaBoostRegressor
+from sklearn.model_selection import GridSearchCV, cross_val_score
+from sklearn.feature_selection import RFE
 
 # --- Configuration ---
 warnings.filterwarnings('ignore')
@@ -19,7 +23,7 @@ SUBMISSION_FILE = 'sample_submission.csv'
 OUTPUT_FILE = 'submission.csv'
 
 # K-Fold setup
-N_SPLITS = 2
+N_SPLITS = 15
 RANDOM_SEED = 42
 
 # ----------------- Data Loading -----------------
@@ -99,6 +103,10 @@ def preprocess_and_feature_engineer(train_df, test_df):
     all_data['HasPool'] = (all_data['SwimmingPoolArea']>0).astype(int)
     all_data['OverallQuality_Cond'] = all_data['OverallQuality']*all_data['OverallCondition']
 
+    # Convert any remaining object columns to numeric codes
+    for col in all_data.select_dtypes(include='object').columns:
+        all_data[col] = all_data[col].astype('category').cat.codes
+
     print(f"Feature engineering complete. New data shape: {all_data.shape}\n")
 
     X = all_data[:ntrain]
@@ -106,43 +114,57 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
     return X, X_test, y_train, test_ids
 
-# ----------------- One-Hot Encoding for GBM -----------------
 def preprocess_for_gbm(X, X_test):
+    from sklearn.preprocessing import LabelEncoder
     X_all = pd.concat([X, X_test], axis=0)
-    X_all = pd.get_dummies(X_all, drop_first=True)
+    for col in X_all.columns:
+        if X_all[col].dtype == 'object':
+            le = LabelEncoder()
+            X_all[col] = le.fit_transform(X_all[col].astype(str))
     X = X_all.iloc[:len(X), :]
     X_test = X_all.iloc[len(X):, :]
-    print(f"After one-hot encoding, train shape: {X.shape}, test shape: {X_test.shape}\n")
+    print(f"After label encoding, train shape: {X.shape}, test shape: {X_test.shape}")
     return X, X_test
 
-# ----------------- Model Training -----------------
+
 def train_model(X, y_train, X_test):
-    print("--- 4. Model Training: Gradient Boosting Regressor ---")
-    kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_SEED)
-    oof_predictions = np.zeros(X.shape[0])
-    test_predictions = np.zeros(X_test.shape[0])
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.model_selection import KFold
+    from sklearn.metrics import mean_squared_error
+    import numpy as np
 
-    for fold, (train_index, val_index) in enumerate(kf.split(X, y_train)):
-        print(f"--- Fold {fold+1}/{N_SPLITS} ---")
-        X_train_fold, X_val_fold = X.iloc[train_index], X.iloc[val_index]
-        y_train_fold, y_val_fold = y_train.iloc[train_index], y_train.iloc[val_index]
+    print("--- 4. Model Training: Random Forest Regressor (Tuned) ---")
 
-        model = GradientBoostingRegressor(
-            n_estimators=1000,
-            learning_rate=0.05,
-            max_depth=6,
-            subsample=0.8,
-            max_features=0.8,
-            random_state=RANDOM_SEED
-        )
+    model = RandomForestRegressor(
+        n_estimators=1200,
+        max_depth=20,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        max_features='sqrt',
+        bootstrap=True,
+        random_state=RANDOM_SEED,
+        n_jobs=-1
+    )
 
-        model.fit(X_train_fold, y_train_fold)
-        oof_predictions[val_index] = model.predict(X_val_fold)
-        test_predictions += model.predict(X_test) / N_SPLITS
+    kf = KFold(n_splits=10, shuffle=True, random_state=RANDOM_SEED)
+    oof_preds = np.zeros(len(X))
+    test_preds = np.zeros(len(X_test))
 
-    oof_rmse = np.sqrt(mean_squared_error(y_train, oof_predictions))
-    print(f"\nTraining complete. OOF RMSE: {oof_rmse:.5f}\n")
-    return test_predictions
+    for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train_fold, y_val = y_train.iloc[train_idx], y_train.iloc[val_idx]
+
+        model.fit(X_train, y_train_fold)
+        val_preds = model.predict(X_val)
+        oof_preds[val_idx] = val_preds
+        test_preds += model.predict(X_test) / kf.n_splits
+
+        rmse = np.sqrt(mean_squared_error(y_val, val_preds))
+        print(f"Fold {fold+1} RMSE: {rmse:.5f}")
+
+    overall_rmse = np.sqrt(mean_squared_error(y_train, oof_preds))
+    print(f"\nOverall OOF RMSE (log-transformed): {overall_rmse:.5f}")
+    return test_preds
 
 # ----------------- Submission -----------------
 def create_submission(test_ids, test_predictions):
@@ -161,7 +183,6 @@ if __name__ == "__main__":
     if train_df is not None:
         perform_eda(train_df)
         X, X_test, y_train, test_ids = preprocess_and_feature_engineer(train_df, test_df)
-        X, X_test = preprocess_for_gbm(X, X_test)
         test_predictions = train_model(X, y_train, X_test)
         create_submission(test_ids, test_predictions)
         print("\nPipeline finished successfully!")
