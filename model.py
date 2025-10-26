@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import BayesianRidge
 import seaborn as sns
 warnings.filterwarnings('ignore')
+import xgboost as xgb
 
 # ---------------- Configuration ----------------
 TRAIN_FILE = 'train.csv'
@@ -173,7 +174,7 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
 # ----------------- 4. Model Training -----------------
 def train_model(X, y, X_test):
-    print("--- 4. Model Training: Bayesian Ridge ---")
+    print("--- 4. Model Training: XGBoost Regressor ---")
     num_cols = X.select_dtypes(include=np.number).columns.tolist()
     cat_cols = X.select_dtypes(include=['object','category']).columns.tolist()
 
@@ -183,7 +184,7 @@ def train_model(X, y, X_test):
     ])
     categorical_transformer = Pipeline([
         ('imputer', SimpleImputer(strategy='constant', fill_value='None')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))  # <<< DENSE OUTPUT
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))  # dense for XGBoost
     ])
     preprocessor = ColumnTransformer([
         ('num', numeric_transformer, num_cols),
@@ -192,13 +193,21 @@ def train_model(X, y, X_test):
 
     model = Pipeline([
         ('preprocessor', preprocessor),
-        ('bayes', BayesianRidge())
+        ('xgb', xgb.XGBRegressor(
+            n_estimators=1000,
+            learning_rate=0.05,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=RANDOM_SEED,
+            tree_method='hist',  # faster
+            eval_metric='rmse'
+        ))
     ])
 
     model.fit(X, y)
     y_test_pred_log = model.predict(X_test)
     return y_test_pred_log
-
 # ----------------- 5. Submission -----------------
 def create_submission(test_ids, y_pred_log):
     y_pred = np.expm1(y_pred_log)
