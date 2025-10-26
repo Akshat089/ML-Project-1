@@ -2,28 +2,26 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import warnings
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
-from sklearn.ensemble import GradientBoostingRegressor
-import warnings
-import os
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor, GradientBoostingRegressor, AdaBoostRegressor
-from sklearn.model_selection import GridSearchCV, cross_val_score
-from sklearn.feature_selection import RFE
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.feature_selection import VarianceThreshold
 
 # --- Configuration ---
 warnings.filterwarnings('ignore')
 sns.set_style("darkgrid")
 
-# Define file names
 TRAIN_FILE = 'train.csv'
 TEST_FILE = 'test.csv'
 SUBMISSION_FILE = 'sample_submission.csv'
 OUTPUT_FILE = 'submission.csv'
 
-# K-Fold setup
-N_SPLITS = 15
+N_SPLITS = 10
 RANDOM_SEED = 42
 
 # ----------------- Data Loading -----------------
@@ -49,94 +47,66 @@ def perform_eda(train_df):
     print(f"Target Skew: Original={original_skew:.2f}, Log-Transformed={log_skew:.2f}")
     print("We'll use log-transformed target for training.\n")
 
-# ----------------- Preprocessing & Feature Engineering -----------------
+# ----------------- Preprocessing (from Ridge method) -----------------
 def preprocess_and_feature_engineer(train_df, test_df):
-    print("--- 3. Preprocessing & Feature Engineering ---")
+    print("--- 3. Preprocessing (ColumnTransformer + Imputer + OneHot + Scaler) ---")
+
+    # Save test IDs
     test_ids = test_df['Id']
-    ntrain = len(train_df)
 
     # Log-transform target
     y_train = np.log1p(train_df['HotelValue'])
 
-    # Drop Id and target
-    train_df = train_df.drop(['Id', 'HotelValue'], axis=1)
-    test_df = test_df.drop('Id', axis=1)
+    # Drop target and ID
+    X_train = train_df.drop(['Id', 'HotelValue'], axis=1)
+    X_test = test_df.drop(['Id'], axis=1)
 
-    # Combine train and test
-    all_data = pd.concat((train_df, test_df)).reset_index(drop=True)
-    print(f"Combined data shape: {all_data.shape}")
+    # Identify column types
+    num_cols = X_train.select_dtypes(include=[np.number]).columns
+    cat_cols = X_train.select_dtypes(include=['object']).columns
 
-    # Fill missing numerical values
-    num_cols_fill_zero = ['FacadeArea', 'BasementFacilitySF1', 'BasementFacilitySF2', 'BasementUnfinishedSF',
-                          'BasementTotalSF', 'BasementFullBaths', 'BasementHalfBaths', 'ParkingArea',
-                          'SwimmingPoolArea', 'ExtraFacilityValue', 'ParkingConstructionYear']
-    for col in num_cols_fill_zero:
-        all_data[col] = all_data[col].fillna(0)
-    all_data['RoadAccessLength'] = all_data['RoadAccessLength'].fillna(all_data['RoadAccessLength'].median())
+    print(f"Numeric features: {len(num_cols)}, Categorical features: {len(cat_cols)}")
 
-    # Fill missing categorical values
-    none_cols = ['ServiceLaneType', 'FacadeType', 'BasementHeight', 'BasementCondition', 'BasementExposure',
-                 'BasementFacilityType1', 'BasementFacilityType2', 'ParkingType', 'ParkingFinish', 'ParkingQuality',
-                 'ParkingCondition', 'PoolQuality', 'BoundaryFence', 'ExtraFacility', 'LoungeQuality']
-    for col in none_cols:
-        all_data[col] = all_data[col].fillna('None')
-    mode_cols = ['ZoningCategory', 'UtilityAccess', 'ElectricalSystem', 'KitchenQuality', 'PropertyFunctionality']
-    for col in mode_cols:
-        all_data[col] = all_data[col].fillna(all_data[col].mode()[0])
+    # Define preprocessing pipeline (from Ridge section)
+    numeric_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='mean')),
+        ('scaler', StandardScaler())
+    ])
 
-    # Ordinal mapping
-    quality_mapping = {'None':0,'Po':1,'Fa':2,'TA':3,'Gd':4,'Ex':5}
-    ordinal_cols = ['ExteriorQuality','ExteriorCondition','BasementHeight','BasementCondition',
-                    'HeatingQuality','KitchenQuality','LoungeQuality','ParkingQuality','ParkingCondition','PoolQuality']
-    for col in ordinal_cols:
-        all_data[col] = all_data[col].map(quality_mapping).fillna(0)
-    all_data['BasementExposure'] = all_data['BasementExposure'].map({'None':0,'No':1,'Mn':2,'Av':3,'Gd':4}).fillna(0)
-    all_data['PropertyFunctionality'] = all_data['PropertyFunctionality'].map({'Sal':0,'Sev':1,'Maj2':2,'Maj1':3,'Mod':4,'Min2':5,'Min1':6,'Typ':7}).fillna(7)
-    all_data['ParkingFinish'] = all_data['ParkingFinish'].map({'None':0,'Unf':1,'RFn':2,'Fin':3}).fillna(0)
+    categorical_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ])
 
-    # Feature engineering
-    all_data['PropertyAge'] = all_data['YearSold'] - all_data['ConstructionYear']
-    all_data['AgeSinceRemodel'] = all_data['YearSold'] - all_data['RenovationYear']
-    all_data['TotalSF'] = all_data['BasementTotalSF'] + all_data['GroundFloorArea'] + all_data['UpperFloorArea']
-    all_data['TotalBaths'] = all_data['FullBaths'] + 0.5*all_data['HalfBaths'] + all_data['BasementFullBaths'] + 0.5*all_data['BasementHalfBaths']
-    all_data['TotalPorchSF'] = all_data['TerraceArea'] + all_data['OpenVerandaArea'] + all_data['EnclosedVerandaArea'] + all_data['SeasonalPorchArea'] + all_data['ScreenPorchArea']
-    all_data['HasPool'] = (all_data['SwimmingPoolArea']>0).astype(int)
-    all_data['OverallQuality_Cond'] = all_data['OverallQuality']*all_data['OverallCondition']
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, num_cols),
+            ('cat', categorical_transformer, cat_cols)
+        ])
 
-    # Convert any remaining object columns to numeric codes
-    for col in all_data.select_dtypes(include='object').columns:
-        all_data[col] = all_data[col].astype('category').cat.codes
+    # Add a variance threshold selector
+    selector = VarianceThreshold(0.01)
 
-    print(f"Feature engineering complete. New data shape: {all_data.shape}\n")
+    # Combine into a full preprocessing pipeline
+    preprocessing_pipeline = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('selector', selector)
+    ])
 
-    X = all_data[:ntrain]
-    X_test = all_data[ntrain:]
+    # Fit on train and transform both
+    X_train_processed = preprocessing_pipeline.fit_transform(X_train)
+    X_test_processed = preprocessing_pipeline.transform(X_test)
 
-    return X, X_test, y_train, test_ids
+    print(f"After preprocessing: Train shape = {X_train_processed.shape}, Test shape = {X_test_processed.shape}\n")
 
-def preprocess_for_gbm(X, X_test):
-    from sklearn.preprocessing import LabelEncoder
-    X_all = pd.concat([X, X_test], axis=0)
-    for col in X_all.columns:
-        if X_all[col].dtype == 'object':
-            le = LabelEncoder()
-            X_all[col] = le.fit_transform(X_all[col].astype(str))
-    X = X_all.iloc[:len(X), :]
-    X_test = X_all.iloc[len(X):, :]
-    print(f"After label encoding, train shape: {X.shape}, test shape: {X_test.shape}")
-    return X, X_test
+    return X_train_processed, X_test_processed, y_train, test_ids
 
-
+# ----------------- Model Training -----------------
 def train_model(X, y_train, X_test):
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.model_selection import KFold
-    from sklearn.metrics import mean_squared_error
-    import numpy as np
-
-    print("--- 4. Model Training: Random Forest Regressor (Tuned) ---")
+    print("--- 4. Model Training: Random Forest (with Clean Preprocessing) ---")
 
     model = RandomForestRegressor(
-        n_estimators=1200,
+        n_estimators=800,
         max_depth=20,
         min_samples_split=5,
         min_samples_leaf=2,
@@ -146,40 +116,43 @@ def train_model(X, y_train, X_test):
         n_jobs=-1
     )
 
-    kf = KFold(n_splits=10, shuffle=True, random_state=RANDOM_SEED)
-    oof_preds = np.zeros(len(X))
-    test_preds = np.zeros(len(X_test))
+    kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_SEED)
+    oof_preds = np.zeros(len(y_train))
+    test_preds = np.zeros(X_test.shape[0])
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train_fold, y_val = y_train.iloc[train_idx], y_train.iloc[val_idx]
+        X_train_fold, X_val_fold = X[train_idx], X[val_idx]
+        y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
-        model.fit(X_train, y_train_fold)
-        val_preds = model.predict(X_val)
+        model.fit(X_train_fold, y_train_fold)
+        val_preds = model.predict(X_val_fold)
         oof_preds[val_idx] = val_preds
-        test_preds += model.predict(X_test) / kf.n_splits
+        test_preds += model.predict(X_test) / N_SPLITS
 
-        rmse = np.sqrt(mean_squared_error(y_val, val_preds))
-        print(f"Fold {fold+1} RMSE: {rmse:.5f}")
+        rmse = np.sqrt(mean_squared_error(y_val_fold, val_preds))
+        print(f"Fold {fold + 1} RMSE: {rmse:.5f}")
 
     overall_rmse = np.sqrt(mean_squared_error(y_train, oof_preds))
-    print(f"\nOverall OOF RMSE (log-transformed): {overall_rmse:.5f}")
+    print(f"\nOverall OOF RMSE (log-transformed): {overall_rmse:.5f}\n")
+
     return test_preds
 
 # ----------------- Submission -----------------
 def create_submission(test_ids, test_predictions):
     print("--- 5. Creating Submission ---")
     final_predictions = np.expm1(test_predictions)
-    final_predictions[final_predictions<0] = 0
+    final_predictions[final_predictions < 0] = 0
+
     submission_df = pd.DataFrame({'Id': test_ids, 'HotelValue': final_predictions})
     submission_df.to_csv(OUTPUT_FILE, index=False)
-    print(f"Submission file saved at {OUTPUT_FILE}")
+    print(f"Submission file saved as: {OUTPUT_FILE}")
     print(submission_df.head())
 
 # ----------------- Main Pipeline -----------------
 if __name__ == "__main__":
     print("Starting Hotel Value Prediction Pipeline...")
     train_df, test_df, sample_sub = load_data()
+
     if train_df is not None:
         perform_eda(train_df)
         X, X_test, y_train, test_ids = preprocess_and_feature_engineer(train_df, test_df)
