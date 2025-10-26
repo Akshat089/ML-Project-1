@@ -13,6 +13,8 @@ import warnings
 import matplotlib.pyplot as plt
 from sklearn.linear_model import BayesianRidge
 import seaborn as sns
+from sklearn.linear_model import LinearRegression
+
 warnings.filterwarnings('ignore')
 import xgboost as xgb
 
@@ -174,7 +176,7 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
 # ----------------- 4. Model Training -----------------
 def train_model(X, y, X_test):
-    print("--- 4. Model Training: XGBoost Regressor ---")
+    print("--- 4. Model Training: Linear Regression ---")
     num_cols = X.select_dtypes(include=np.number).columns.tolist()
     cat_cols = X.select_dtypes(include=['object','category']).columns.tolist()
 
@@ -184,7 +186,7 @@ def train_model(X, y, X_test):
     ])
     categorical_transformer = Pipeline([
         ('imputer', SimpleImputer(strategy='constant', fill_value='None')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))  # dense for XGBoost
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))  # dense for Linear Regression
     ])
     preprocessor = ColumnTransformer([
         ('num', numeric_transformer, num_cols),
@@ -193,16 +195,7 @@ def train_model(X, y, X_test):
 
     model = Pipeline([
         ('preprocessor', preprocessor),
-        ('xgb', xgb.XGBRegressor(
-            n_estimators=1000,
-            learning_rate=0.05,
-            max_depth=6,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=RANDOM_SEED,
-            tree_method='hist',  # faster
-            eval_metric='rmse'
-        ))
+        ('linear', LinearRegression())
     ])
 
     model.fit(X, y)
