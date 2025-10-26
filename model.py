@@ -125,6 +125,8 @@ def preprocess_and_feature_engineer(train_df, test_df):
     basement_map = {'GLQ':5, 'ALQ':4, 'BLQ':3, 'Rec':3, 'LwQ':2, 'Unf':1, 'None':0}
     pool_map = {'None':0, 'Fa':1, 'TA':2, 'Gd':3, 'Ex':4} 
     for df in [X_train, X_test]:
+        df['QualityRating'] = df['OverallQuality']  # create new column
+        df['ValueDensity'] = df['QualityRating'] / np.log1p(df['LandArea'].fillna(0) + 1)
     # Basement
         df['BasementArea1'] = df['BasementFacilitySF1'].fillna(0)
         df['BasementArea2'] = df['BasementFacilitySF2'].fillna(0)
@@ -160,32 +162,40 @@ def preprocess_and_feature_engineer(train_df, test_df):
     return X_train, X_test, y_train, test_ids
 
 # ----------------- 4. Model Training -----------------
+# ----------------- 4. Model Training -----------------
 def train_model(X, y, X_test):
-    print("--- 4. Model Training: KNN Regression ---")
+    print("--- 4. Model Training: Linear Regression ---")
+    
+    # Separate numeric and categorical columns
     num_cols = X.select_dtypes(include=np.number).columns.tolist()
     cat_cols = X.select_dtypes(include=['object','category']).columns.tolist()
 
+    # Preprocessing pipelines
     numeric_transformer = Pipeline([
         ('imputer', SimpleImputer(strategy='median')),
         ('scaler', StandardScaler())
     ])
     categorical_transformer = Pipeline([
         ('imputer', SimpleImputer(strategy='constant', fill_value='None')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))  # dense for KNN
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
     ])
     preprocessor = ColumnTransformer([
         ('num', numeric_transformer, num_cols),
         ('cat', categorical_transformer, cat_cols)
     ])
 
+    # Linear Regression model pipeline
     model = Pipeline([
         ('preprocessor', preprocessor),
-        ('knn', KNeighborsRegressor(n_neighbors=5, weights='distance'))
+        ('regressor', LinearRegression())
     ])
 
+    # Fit model
     model.fit(X, y)
     y_test_pred_log = model.predict(X_test)
     return y_test_pred_log
+
+
 # ----------------- 5. Submission -----------------
 def create_submission(test_ids, y_pred_log):
     y_pred = np.expm1(y_pred_log)
