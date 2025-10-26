@@ -5,7 +5,7 @@ import seaborn as sns
 import warnings
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import ElasticNet
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
@@ -19,7 +19,7 @@ sns.set_style("darkgrid")
 TRAIN_FILE = 'train.csv'
 TEST_FILE = 'test.csv'
 SUBMISSION_FILE = 'sample_submission.csv'
-OUTPUT_FILE = 'submission.csv'
+OUTPUT_FILE = 'submission_elasticnet.csv'
 
 N_SPLITS = 10
 RANDOM_SEED = 42
@@ -47,7 +47,7 @@ def perform_eda(train_df):
     print(f"Target Skew: Original={original_skew:.2f}, Log-Transformed={log_skew:.2f}")
     print("We'll use log-transformed target for training.\n")
 
-# ----------------- Preprocessing (from Ridge method) -----------------
+# ----------------- Preprocessing -----------------
 def preprocess_and_feature_engineer(train_df, test_df):
     print("--- 3. Preprocessing (ColumnTransformer + Imputer + OneHot + Scaler) ---")
 
@@ -67,7 +67,7 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
     print(f"Numeric features: {len(num_cols)}, Categorical features: {len(cat_cols)}")
 
-    # Define preprocessing pipeline (from Ridge section)
+    # Define preprocessing pipeline (same as before)
     numeric_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='mean')),
         ('scaler', StandardScaler())
@@ -84,16 +84,16 @@ def preprocess_and_feature_engineer(train_df, test_df):
             ('cat', categorical_transformer, cat_cols)
         ])
 
-    # Add a variance threshold selector
+    # Add variance threshold selector
     selector = VarianceThreshold(0.01)
 
-    # Combine into a full preprocessing pipeline
+    # Combine preprocessing steps
     preprocessing_pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
         ('selector', selector)
     ])
 
-    # Fit on train and transform both
+    # Fit on train, transform both
     X_train_processed = preprocessing_pipeline.fit_transform(X_train)
     X_test_processed = preprocessing_pipeline.transform(X_test)
 
@@ -103,17 +103,14 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
 # ----------------- Model Training -----------------
 def train_model(X, y_train, X_test):
-    print("--- 4. Model Training: Random Forest (with Clean Preprocessing) ---")
+    print("--- 4. Model Training: Elastic Net Regression ---")
 
-    model = RandomForestRegressor(
-        n_estimators=800,
-        max_depth=20,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        max_features='sqrt',
-        bootstrap=True,
-        random_state=RANDOM_SEED,
-        n_jobs=-1
+    # Elastic Net Model (mix of L1 & L2)
+    model = ElasticNet(
+        alpha=0.1,       # overall regularization strength
+        l1_ratio=0.5,    # balance between L1 (Lasso) and L2 (Ridge)
+        max_iter=5000,
+        random_state=RANDOM_SEED
     )
 
     kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_SEED)
@@ -150,7 +147,7 @@ def create_submission(test_ids, test_predictions):
 
 # ----------------- Main Pipeline -----------------
 if __name__ == "__main__":
-    print("Starting Hotel Value Prediction Pipeline...")
+    print("Starting Hotel Value Prediction Pipeline (Elastic Net)...")
     train_df, test_df, sample_sub = load_data()
 
     if train_df is not None:
