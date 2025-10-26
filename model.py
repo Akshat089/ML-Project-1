@@ -6,9 +6,12 @@ from sklearn.linear_model import LassoCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import RidgeCV
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import VarianceThreshold
 import warnings
+import matplotlib.pyplot as plt
+import seaborn as sns
 warnings.filterwarnings('ignore')
 
 # ---------------- Configuration ----------------
@@ -32,6 +35,62 @@ def perform_eda(train_df):
     print("--- 2. Performing EDA ---")
     print(f"Original target skew: {train_df['HotelValue'].skew():.2f}")
     print(f"Log-transformed target skew: {np.log1p(train_df['HotelValue']).skew():.2f}")
+    
+    plt.figure(figsize=(12,5))
+    plt.subplot(1,2,1)
+    sns.histplot(train_df['HotelValue'], kde=True, bins=50, color='skyblue')
+    plt.title("HotelValue Distribution (Original)")
+    
+    plt.subplot(1,2,2)
+    sns.histplot(np.log1p(train_df['HotelValue']), kde=True, bins=50, color='orange')
+    plt.title("HotelValue Distribution (Log-Transformed)")
+    plt.show()
+    
+    # --- Missing Data ---
+    missing_pct = (train_df.isnull().sum() / len(train_df)) * 100
+    missing_pct = missing_pct[missing_pct > 0].sort_values(ascending=False)
+    print(f"Top 5 Features with Missing Data:")
+    print(missing_pct.head(6))
+    
+    plt.figure(figsize=(12,6))
+    sns.heatmap(train_df.isnull(), cbar=False, yticklabels=False, cmap='viridis')
+    plt.title("Missing Data Heatmap")
+    plt.show()
+
+    # --- Correlation Matrix for Numerical Features ---
+    numeric_cols = train_df.select_dtypes(include=np.number).columns
+    corr_matrix = train_df[numeric_cols].corr()
+    
+    plt.figure(figsize=(15,12))
+    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', center=0)
+    plt.title("Correlation Matrix")
+    plt.show()
+    
+    # --- Top Features Correlated with HotelValue (Top 10) ---
+    top_corr_features = corr_matrix['HotelValue'].sort_values(ascending=False).drop('HotelValue').head(10)
+    print("Top 10 Numerical Features Correlated with HotelValue:")
+    print(top_corr_features)
+
+# Bar plot of correlation values
+    plt.figure(figsize=(10,6))
+    sns.barplot(x=top_corr_features.values, y=top_corr_features.index, palette="viridis")
+    plt.title("Top 10 Features Most Correlated with HotelValue")
+    plt.xlabel("Correlation with HotelValue")
+    plt.ylabel("Feature")
+    plt.show()
+
+# Plot each top feature against HotelValue
+    for feature in top_corr_features.index:
+        plt.figure(figsize=(6,4))
+        sns.scatterplot(x=train_df[feature], y=train_df['HotelValue'])
+        plt.title(f"{feature} vs HotelValue")
+        plt.xlabel(feature)
+        plt.ylabel("HotelValue")
+        plt.show()
+
+    
+    
+    print("\nEDA complete with graphs.\n")
 
 # ----------------- 3. Preprocessing & Feature Engineering -----------------
 def preprocess_and_feature_engineer(train_df, test_df):
@@ -113,8 +172,7 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
 # ----------------- 4. Model Training -----------------
 def train_model(X, y, X_test):
-    print("--- 4. Model Training: LassoCV ---")
-    # Numeric/categorical separation
+    print("--- 4. Model Training: RidgeCV ---")
     num_cols = X.select_dtypes(include=np.number).columns.tolist()
     cat_cols = X.select_dtypes(include=['object','category']).columns.tolist()
     
@@ -131,9 +189,10 @@ def train_model(X, y, X_test):
         ('cat', categorical_transformer, cat_cols)
     ])
     
+    # RidgeCV with cross-validated alphas
     model = Pipeline([
         ('preprocessor', preprocessor),
-        ('lasso', LassoCV(alphas=np.logspace(-5,1,100), cv=25, max_iter=10000, random_state=RANDOM_SEED))
+        ('ridge', RidgeCV(alphas=np.logspace(-5,5,100), cv = 10))
     ])
     
     model.fit(X, y)
