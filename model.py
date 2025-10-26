@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import BayesianRidge
 import seaborn as sns
 from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KNeighborsRegressor
 
 warnings.filterwarnings('ignore')
 import xgboost as xgb
@@ -122,48 +123,32 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
     # ---------------- Basement Features ----------------
     basement_map = {'GLQ':5, 'ALQ':4, 'BLQ':3, 'Rec':3, 'LwQ':2, 'Unf':1, 'None':0}
+    pool_map = {'None':0, 'Fa':1, 'TA':2, 'Gd':3, 'Ex':4} 
     for df in [X_train, X_test]:
-        df['BasementFacilitySF1'] = df['BasementFacilitySF1'].fillna(0)
-        df['BasementFacilitySF2'] = df['BasementFacilitySF2'].fillna(0)
-        df['Type1_Score'] = df['BasementFacilityType1'].fillna('None').map(basement_map).fillna(0)
-        df['Type2_Score'] = df['BasementFacilityType2'].fillna('None').map(basement_map).fillna(0)
-        df['TotalBasementScore'] = df['Type1_Score']*df['BasementFacilitySF1'] + df['Type2_Score']*df['BasementFacilitySF2']
-        df['BasementFinishedSF'] = df['BasementFacilitySF1'] + df['BasementFacilitySF2']
-        df.drop(columns=['BasementFacilityType1','BasementFacilityType2','BasementFacilitySF1','BasementFacilitySF2','Type1_Score','Type2_Score'], errors='ignore', inplace=True)
+    # Basement
+        df['BasementArea1'] = df['BasementFacilitySF1'].fillna(0)
+        df['BasementArea2'] = df['BasementFacilitySF2'].fillna(0)
+        df['BasementQualityScore'] = df['BasementFacilityType1'].map(basement_map).fillna(0) + \
+                                 df['BasementFacilityType2'].map(basement_map).fillna(0)
+        df['BasementImpact'] = (df['BasementArea1'] + df['BasementArea2']) * df['BasementQualityScore']
+        df.drop(columns=['BasementFacilitySF1','BasementFacilitySF2','BasementFacilityType1','BasementFacilityType2'], inplace=True)
 
-    # ---------------- Pool Features ----------------
-    pool_map = {'None':0, 'Fa':1, 'TA':2, 'Gd':3, 'Ex':4}
-    for df in [X_train, X_test]:
-        df['SwimmingPoolArea'] = df['SwimmingPoolArea'].fillna(0)
-        df['PoolQuality'] = df['PoolQuality'].fillna('None')
-        df['TotalPoolScore'] = df['SwimmingPoolArea'] * df['PoolQuality'].map(pool_map).fillna(0)
-        df.drop(columns=['PoolQuality','SwimmingPoolArea'], errors='ignore', inplace=True)
+    # Pool
+        df['PoolArea'] = df['SwimmingPoolArea'].fillna(0)
+        df['PoolQualityScore'] = df['PoolQuality'].map(pool_map).fillna(0)
+        df['PoolImpact'] = df['PoolArea'] * df['PoolQualityScore']
+        df.drop(columns=['SwimmingPoolArea','PoolQuality'], inplace=True)
 
-    # ---------------- Porch Features ----------------
-    for df in [X_train, X_test]:
-        df['TotalPorchArea'] = df[['OpenVerandaArea','EnclosedVerandaArea','SeasonalPorchArea','ScreenPorchArea']].fillna(0).sum(axis=1)
-        df.drop(columns=['OpenVerandaArea','EnclosedVerandaArea','SeasonalPorchArea','ScreenPorchArea'], errors='ignore', inplace=True)
+    # Porch
+        df['PorchSpace'] = df[['OpenVerandaArea','EnclosedVerandaArea','SeasonalPorchArea','ScreenPorchArea']].fillna(0).sum(axis=1)
+        df.drop(columns=['OpenVerandaArea','EnclosedVerandaArea','SeasonalPorchArea','ScreenPorchArea'], inplace=True)
 
-    # ---------------- Other Feature Engineering ----------------
-    for df in [X_train, X_test]:
-        # Parking
-        quality_map_5pt = {'Ex':5,'Gd':4,'TA':3,'Fa':2,'Po':1,'None':0}
-        finish_map = {'Fin':3,'RFn':2,'Unf':1,'None':0}
-        df['ParkingQuality'] = df['ParkingQuality'].fillna('None').map(quality_map_5pt).fillna(0)
-        df['ParkingCondition'] = df['ParkingCondition'].fillna('None').map(quality_map_5pt).fillna(0)
-        df['ParkingFinish'] = df['ParkingFinish'].fillna('None').map(finish_map).fillna(0)
-        # House age
-        df['HouseAge'] = df['YearSold'] - df['ConstructionYear']
-        df['RenovationYear'] = df['RenovationYear'].fillna(df['ConstructionYear'])
-        df.loc[df['RenovationYear']==0,'RenovationYear'] = df.loc[df['RenovationYear']==0,'ConstructionYear']
-        df['YearsSinceModification'] = df['YearSold'] - df[['ConstructionYear','RenovationYear']].max(axis=1)
-        # Interaction
-        df['QualityArea'] = df['OverallQuality'] * df['UsableArea']
-        df['TotalBathrooms'] = df['FullBaths'] + 0.5*df['HalfBaths']
-        # Log skewed numeric features
-        for col in ['RoadAccessLength','LandArea','FacadeArea','BasementTotalSF','ParkingArea']:
-            if col in df.columns:
-                df[col+'_Log'] = np.log1p(df[col].fillna(0))
+    # House age
+        df['AgeSinceRenovation'] = df['YearSold'] - df[['ConstructionYear','RenovationYear']].max(axis=1)
+
+    # Interaction
+        df['ValueDensity'] = df['QualityRating'] / np.log1p(df['LandArea'].fillna(0) + 1)
+
 
     # Drop unused columns
     drop_cols = ['Id','BoundaryFence','ExtraFacility','ServiceLaneType','BasementHalfBaths','LowQualityArea','FacadeType','ParkingArea']
@@ -176,7 +161,7 @@ def preprocess_and_feature_engineer(train_df, test_df):
 
 # ----------------- 4. Model Training -----------------
 def train_model(X, y, X_test):
-    print("--- 4. Model Training: Linear Regression ---")
+    print("--- 4. Model Training: KNN Regression ---")
     num_cols = X.select_dtypes(include=np.number).columns.tolist()
     cat_cols = X.select_dtypes(include=['object','category']).columns.tolist()
 
@@ -186,7 +171,7 @@ def train_model(X, y, X_test):
     ])
     categorical_transformer = Pipeline([
         ('imputer', SimpleImputer(strategy='constant', fill_value='None')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))  # dense for Linear Regression
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))  # dense for KNN
     ])
     preprocessor = ColumnTransformer([
         ('num', numeric_transformer, num_cols),
@@ -195,7 +180,7 @@ def train_model(X, y, X_test):
 
     model = Pipeline([
         ('preprocessor', preprocessor),
-        ('linear', LinearRegression())
+        ('knn', KNeighborsRegressor(n_neighbors=5, weights='distance'))
     ])
 
     model.fit(X, y)
